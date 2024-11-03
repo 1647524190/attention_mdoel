@@ -155,7 +155,7 @@ class DPConv(nn.Module):
         output = output / count
 
         out = self.conv3(torch.cat((output, x2), 1))
-        print("output 形状：" + str(out.shape))
+        # print("output 形状：" + str(out.shape))
 
         return out
 
