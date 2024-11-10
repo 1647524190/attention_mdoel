@@ -18,7 +18,6 @@ class SELayer(nn.Module):
     def forward(self, x):
         b, c, _, _ = x.size()
         y = self.avg_pool(x)
-        print(f"shape: {y.shape}")
         y = self.fc(y)
         return x * y
 
@@ -108,8 +107,6 @@ class DPConv(nn.Module):
             out_list.append(attention_output)
 
         out = sum(out_list) / len(out_list)
-        print(out_list[0] - out)
-
         return out
 
 
