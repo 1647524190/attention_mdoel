@@ -18,145 +18,135 @@ class SELayer(nn.Module):
     def forward(self, x):
         b, c, _, _ = x.size()
         y = self.avg_pool(x)
-        print(f"shape: {y.shape}")
         y = self.fc(y)
         return x * y
 
 
-class Multihead_Attention(nn.Module):
-    """
-    对输入张量进行多头自注意力
-    """
-
-    def __init__(self, in_channels, out_channels):
-        super(Multihead_Attention, self).__init__()
-
-        self.dim = self.num_head = in_channels // 64
-        self.h = self.dim * self.num_head
-        self.scale = self.dim ** -0.5
-        self.qkv = nn.Conv2d(in_channels, 3 * self.h, kernel_size=1, stride=1)
-        self.resume = nn.Conv2d(self.h, out_channels, kernel_size=1, stride=1)
-        self.position = nn.Conv2d(self.h, self.h, kernel_size=3, stride=1, padding=1)
+class Attention(nn.Module):
+    def __init__(self, dim, num_heads=8,
+                 attn_ratio=0.5):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.key_dim = int(self.head_dim * attn_ratio)
+        self.scale = self.key_dim ** -0.5
+        nh_kd = nh_kd = self.key_dim * num_heads
+        h = dim + nh_kd * 2
+        self.qkv = nn.Conv2d(dim, h, 1, )
+        self.proj = nn.Conv2d(dim, dim, 1, )
+        self.pe = nn.Conv2d(dim, dim, 3, 1, 1, groups=dim)
 
     def forward(self, x):
-        # 输入 x 的形状为 (N, num_patches, C, H, W)
-        N, C, H, W = x.shape
-
-        # 将输入 reshape，合并 batch 维度和 num_patches 维度
-        x = x.reshape(N, C, H, W)
-
-        # 计算 Q、K、V
+        B, C, H, W = x.shape
+        N = H * W
         qkv = self.qkv(x)
-        qkv = qkv.view(N, self.num_head, -1, H * W)  # (N*num_patches, num_head, 3*dim, H*W)
-        q, k, v = qkv.split([self.dim, self.dim, self.dim], dim=2)  # 分割成 Q、K、V
+        q, k, v = qkv.view(B, self.num_heads, self.key_dim * 2 + self.head_dim, N).split(
+            [self.key_dim, self.key_dim, self.head_dim], dim=2)
 
-        # 计算注意力分数
-        attn = (q.transpose(-2, -1) @ k) * self.scale  # (N*num_patches, H*W, H*W)
+        attn = (
+                (q.transpose(-2, -1) @ k) * self.scale
+        )
         attn = attn.softmax(dim=-1)
-
-        # 计算注意力输出
-        out = (v @ attn.transpose(-2, -1)).view(N, self.h, H, W)
-        out = out + self.position(v.reshape(N, self.h, H, W))
-
-        # 恢复原始形状
-        out = self.resume(out)
-
-        return out
+        x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
+        x = self.proj(x)
+        return x
 
 
 class DPConv(nn.Module):
-    def __init__(self, in_channels, out_channels, extension, num_windows):
+    def __init__(self, in_channels, num_windows):
         """
         类卷积设计注意力模块。
         Args:
             in_channels: 输入通道数
             out_channels: 输出通道数
-            num_windows: unfold展开窗口数。H, W方向上各产生num_windows个窗口
-            extension: 扩充大小，获取更大范围的特征信息，为平方数
         """
         super(DPConv, self).__init__()
+        # if not (num_windows % 2 == 0):
+        #     raise ValueError("Kernel size must be even.")
         self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.num_windows = num_windows
-        self.extension = extension
+        self.bottlenck_channels = in_channels // 3
+        self.num_windows_list = [num_windows // 2, num_windows, num_windows + num_windows // 2]
 
-        self.conv1 = nn.Conv2d(self.in_channels, 2 * self.in_channels, kernel_size=1)
-        self.conv2 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1)
-        self.conv3 = nn.Conv2d(2 * self.in_channels, self.in_channels, kernel_size=1)
-        self.position = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, stride=1, padding=1)
-        self.attention = SELayer(self.in_channels, int(self.in_channels ** 0.5))
+        self.conv1 = nn.Conv2d(self.in_channels, self.bottlenck_channels, kernel_size=1, stride=1)
+        self.conv2 = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=1, stride=1)
+        self.conv3 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
+        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1,
+                                  groups=self.bottlenck_channels)
+
+        self.attention = SELayer(self.bottlenck_channels, reduction=16)
+
+    def _make_even(self, x):
+        """
+        确保输入的 H 和 W 为偶数，如果为奇数，则在右边或下方补零。
+        """
+        N, C, H, W = x.shape
+        pad_h = 1 if H % 2 != 0 else 0  # 如果 H 是奇数，补 1
+        pad_w = 1 if W % 2 != 0 else 0  # 如果 W 是奇数，补 1
+
+        # 使用 F.pad 进行补偿，右边和下方分别补 0
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode='constant', value=0)
+
+        return x
+
+    def _get_unfold_config(self, x):
+        """
+        计算不同尺寸输入下的unfold的核长kernel和步长stride，以便于能处理到每个像素
+        """
+        N, C, H, W = x.shape
+        kernel_list = []
+        stride_list = []
+
+        for i in range(len(self.num_windows_list)):
+            H_stride = H // self.num_windows_list[i]
+            H_kernel = H_stride + H % self.num_windows_list[i]
+            W_stride = W // self.num_windows_list[i]
+            W_kernel = W_stride + W % self.num_windows_list[i]
+            kernel_list.append((H_kernel, W_kernel))
+            stride_list.append((H_stride, W_stride))
+
+        return kernel_list, stride_list
 
     def forward(self, x):
-        x1, x2 = self.conv1(x).split((self.in_channels, self.in_channels), dim=1)
-        print("分裂之后的 x1, x2的形状：" + str(x1.shape) + str(x2.shape))
-        N_orin, C_orin, H_orin, W_orin = x1.shape
-        # 对边界进行填充，以获取更大范围的特征信息
-        x1 = F.pad(x1, (self.extension, self.extension, self.extension, self.extension), mode='replicate')
-        N_pad, C_pad, H_pad, W_pad = x1.shape
+        x_compress = self.conv1(x)
+        N, C, H, W = x_compress.shape
+        kernel_list, stride_list = self._get_unfold_config(x_compress)
+        # print("kernel_list: " + str(kernel_list))
+        # print("stride_list: " + str(stride_list))
 
-        # 还原为原尺寸时的fold的kernel和stride尺寸
-        H_orin_stride = H_orin // self.num_windows
-        H_orin_kernel = H_orin_stride + H_orin % self.num_windows
-        W_orin_stride = W_orin // self.num_windows
-        W_orin_kernel = W_orin_stride + W_orin % self.num_windows
-        print("H_orin: kernel: " + str(H_orin_kernel) + "; stride: " + str(H_orin_stride))
-        print("W_orin: kernel: " + str(W_orin_kernel) + "; stride: " + str(W_orin_stride))
+        # 多尺度unfold核展开
+        out_list = []
+        for i in range(len(self.num_windows_list)):
+            # 对张量进行unfold展开，分解为 num_windows * num_windows 个子块
+            # (N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
+            unfolded = F.unfold(x_compress, kernel_size=kernel_list[i], stride=stride_list[i])
+            # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
+            unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
+            unfolded = self.conv2(unfolded) + self.position(unfolded)
 
-        # 填充后的张量unfold时的kernel和stride尺寸
-        H_pad_stride = H_pad // self.num_windows
-        H_pad_kernel = H_pad_stride + H_pad % self.num_windows
-        W_pad_stride = W_pad // self.num_windows
-        W_pad_kernel = W_pad_stride + W_pad % self.num_windows
-        print("H_pad: kernel: " + str(H_pad_kernel) + "; stride: " + str(H_pad_stride))
-        print("W_pad: kernel: " + str(W_pad_kernel) + "; stride: " + str(W_pad_stride))
+            # 输入注意力模块
+            # attention_output = unfolded
+            attention_output = self.attention(unfolded)
 
-        # 对张量进行unfold展开，分解为 num_windows * num_windows 个子块
-        # (N, C*H_pad_kernel*W_pad_kernel, num_windows * num_windows)
-        unfolded = F.unfold(x1, kernel_size=(H_pad_kernel, W_pad_kernel), stride=(H_pad_stride, W_pad_stride))
-        # view为(N, C, H_pad_kernel, W_pad_kernel, num_windows * num_windows),便于后续处理
-        unfolded = unfolded.view(N_pad, C_pad, H_pad_kernel, W_pad_kernel, self.num_windows ** 2)
-        print("unfolded的形状: " + str(unfolded.shape))
+            # 转化为(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)，便于进行fold操作
+            attention_output = attention_output.view(N, C * kernel_list[i][0] * kernel_list[i][1],
+                                                     self.num_windows_list[i] ** 2)
 
-        # 对每个窗口进行平均池化，池化到 (H_orin_kernel, W_orin_kernel) 大小
-        pooled_regions = F.adaptive_avg_pool2d(
-            unfolded.permute(0, 4, 1, 2, 3).contiguous().view(N_pad, -1, H_pad_kernel, W_pad_kernel),
-            output_size=(H_orin_kernel, W_orin_kernel))
-        print("pooled_region的形状： " + str(pooled_regions.shape))
-        # view为(N, num_windows * num_windows, C, H_orin_kernel * W_orin_kernel), 便于后续处理
-        pooled_regions = pooled_regions.view(-1, C_pad, H_orin_kernel, W_orin_kernel)
-        print("view之后的pooled_region的形状： " + str(pooled_regions.shape))
-        print("num_windows数目： " + str(self.num_windows))
-        print("conv2后的pooled_region的形状： " + str(self.conv2(pooled_regions).shape))
+            # 计算重叠部分的权重
+            count = F.fold(torch.ones_like(attention_output), output_size=(H, W), kernel_size=kernel_list[i],
+                           stride=stride_list[i])
+            # print("count 形状: " + str(count.shape))
 
-        # 添加位置编码
-        pooled_regions = self.conv2(pooled_regions) + self.position(pooled_regions)
-        print("位置编码之后的pooled_region的形状： " + str(pooled_regions.shape))
-        print("pooled_region的形状： " + str(pooled_regions.shape))
+            # 重新通过 fold 将滑动窗口展开为完整的张量，形状为(N, C, H_orin, W_orin)
+            attention_output = F.fold(attention_output, output_size=(H, W), kernel_size=kernel_list[i],
+                                      stride=stride_list[i])
+            # print("fold后的形状: " + str(output.shape))
 
-        # 输入注意力模块
-        attention_output = self.attention(pooled_regions) + pooled_regions
-        print("attention的形状： " + str(attention_output.shape))
+            # 对重叠部分取平均值
+            attention_output = attention_output / count
+            out_list.append(attention_output)
 
-        # 转化为(N, C * H_orin_kernel * W_orin_kernel, num_windows * num_windows)，便于进行fold操作
-        attention_output = attention_output.view(N_orin, C_orin * H_orin_kernel * W_orin_kernel, self.num_windows ** 2)
-        print("view之后的attention的形状： " + str(attention_output.shape))
-
-        # 重新通过 fold 将滑动窗口展开为完整的张量，形状为(N, C, H_orin, W_orin)
-        output = F.fold(attention_output, output_size=(H_orin, W_orin),
-                        kernel_size=(H_orin_kernel, W_orin_kernel), stride=(H_orin_stride, W_orin_stride))
-        print("fold后的形状: " + str(output.shape))
-
-        # 计算重叠部分的权重
-        count = F.fold(torch.ones_like(attention_output), output_size=(H_orin, W_orin),
-                       kernel_size=(H_orin_kernel, W_orin_kernel), stride=(H_orin_stride, W_orin_stride))
-        print("count 形状: " + str(count.shape))
-
-        # 对重叠部分取平均值
-        output = output / count
-
-        out = self.conv3(torch.cat((output, x2), 1))
-        print("output 形状：" + str(out.shape))
-
+        out = self.conv3(torch.cat(out_list, dim=1) + x)
         return out
 
 
@@ -164,9 +154,9 @@ class DPConv(nn.Module):
 if __name__ == '__main__':
     # x = torch.randn(2, 2, 4, 4)
     # x = torch.randn(4, 256, 762, 524)
-    x = torch.randn(1, 576, 20, 20)
+    x = torch.randn(1, 576, 8, 8)
 
-    attention = DPConv(x.shape[1], x.shape[1], 1, 6)
+    attention = DPConv(x.shape[1], 5)
     flops, params = profile(attention, inputs=(x,))
     print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     print('Params = ' + str(params))
