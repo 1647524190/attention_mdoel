@@ -60,12 +60,10 @@ class DPConv(nn.Module):
         Args:
             in_channels: 输入通道数
             out_channels: 输出通道数
-            num_windows: unfold展开窗口数。H, W方向上各产生num_windows个窗口
-            extension: 扩充大小，获取更大范围的特征信息
         """
         super(DPConv, self).__init__()
-        if not (kernel > 2 and kernel % 2 == 0):
-            raise ValueError("Kernel size must be an even number greater than 2.")
+        if not (kernel % 4 == 0):
+            raise ValueError("Kernel size must be a multiple of 4.")
         self.in_channels = in_channels
         self.bottleneck_channels = (self.in_channels // 4) * 4
         self.out_channels = out_channels
@@ -74,45 +72,28 @@ class DPConv(nn.Module):
         self.stride = stride
         self.padding = self.kernel // 2
 
-        # self.reduce = nn.Conv2d(self.in_channels, self.in_channels // 4, kernel_size=1, stride=1)
-        self.conv = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
-        self.pe = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, stride=1, padding=1,
-                            groups=self.in_channels)
         self.attention = Attention(self.in_channels, num_heads=self.out_channels // 64)
-        self.weight = nn.Parameter(torch.ones(len(self.kernel_list) + 1))
 
     def forward(self, x):
-        print("输入特征均值mean:", x.mean().item(), "输入特征方差std:", x.std().item())
+        # print("输入特征均值mean:", x.mean().item(), "输入特征方差std:", x.std().item())
         N, C, H, W = x.shape
-        # x = F.pad(x, (self.padding, self.padding, self.padding, self.padding), mode='replicate')
-        # N, C, H_pad, W_pad = x.shape
 
         # 多尺度unfold核展开
         out_list = [x]
         for i in range(len(self.kernel_list)):
-            print("##############################################################################")
-            print("第" + str(i) + "次展开：")
+
             # 对张量进行unfold展开，分解为 num_windows * num_windows 个子块
             # (N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
             unfolded = F.unfold(x, kernel_size=self.kernel_list[i], stride=self.stride)
-            print("unfolded的形状: " + str(unfolded.shape))
             num_windows = unfolded.shape[2]
             # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
             unfolded = unfolded.view(N * num_windows, C, self.kernel_list[i], self.kernel_list[i])
-            print("view之后的unfolded的形状: " + str(unfolded.shape))
 
             # 输入注意力模块
-            print("输入注意力模块前均值mean:", unfolded.mean().item(), "特征方差std:", unfolded.std().item())
-            # attention_output = self.attention(self.pe(unfolded) + unfolded)
-            attention_output = unfolded
-            print("输入注意力模块后均值mean:", attention_output.mean().item(), "特征方差std:", attention_output.std().item())
-
-            # attention_output = pooled_regions
-            # print("attention的形状： " + str(attention_output.shape))
+            attention_output = self.attention(unfolded)
 
             # 转化为(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)，便于进行fold操作
             attention_output = attention_output.view(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
-            # print("view之后的attention的形状： " + str(attention_output.shape))
 
             # 计算重叠部分的权重
             count = F.fold(torch.ones_like(attention_output), output_size=(H, W), kernel_size=self.kernel_list[i], stride=self.stride)
@@ -124,17 +105,10 @@ class DPConv(nn.Module):
 
             # 对重叠部分取平均值
             attention_output = attention_output / count
-            print(f"第 {i} 输出均值mean:", attention_output.mean().item(), "std:", attention_output.std().item())
-            print("第" + str(i) + "个输出形状：" + str(attention_output.shape))
             out_list.append(attention_output)
 
-        out = torch.stack(out_list).sum(dim=0)
-        # print(sum_tensor.shape)
-        out = out / len(out_list)
-        print("####################################################################################################################")
-        print("输入特征均值mean:", x.mean().item(), "输入特征方差std:", x.std().item())
-        print("输出特征均值mean:", out.mean().item(), "输入特征方差std:", out.std().item())
-        # print("out 形状: " + str(out.shape))
+        out = sum(out_list) / len(out_list)
+        print(out_list[0] - out)
 
         return out
 
