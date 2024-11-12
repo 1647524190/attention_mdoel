@@ -64,16 +64,16 @@ class DPConv(nn.Module):
         # if not (num_windows % 2 == 0):
         #     raise ValueError("Kernel size must be even.")
         self.in_channels = in_channels
-        self.bottlenck_channels = in_channels // 3
         self.num_windows_list = [num_windows // 2, num_windows, num_windows + num_windows // 2]
 
-        self.conv1 = nn.Conv2d(self.in_channels, self.bottlenck_channels, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=1, stride=1)
+        self.conv1 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
+        self.conv2 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
         self.conv3 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
-        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1,
-                                  groups=self.bottlenck_channels)
+        self.position = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, stride=1, padding=1,
+                                  groups=self.in_channels)
 
-        self.attention = SELayer(self.bottlenck_channels, reduction=16)
+        self.attention = SELayer(self.in_channels, reduction=16)
+        self.dynamic_weights = nn.Parameter(torch.ones(len(self.num_windows_list)), requires_grad=True)
 
     def _make_even(self, x):
         """
@@ -108,9 +108,9 @@ class DPConv(nn.Module):
         return kernel_list, stride_list
 
     def forward(self, x):
-        x_compress = self.conv1(x)
-        N, C, H, W = x_compress.shape
-        kernel_list, stride_list = self._get_unfold_config(x_compress)
+        x = self.conv1(x)
+        N, C, H, W = x.shape
+        kernel_list, stride_list = self._get_unfold_config(x)
         # print("kernel_list: " + str(kernel_list))
         # print("stride_list: " + str(stride_list))
 
@@ -119,7 +119,7 @@ class DPConv(nn.Module):
         for i in range(len(self.num_windows_list)):
             # 对张量进行unfold展开，分解为 num_windows * num_windows 个子块
             # (N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
-            unfolded = F.unfold(x_compress, kernel_size=kernel_list[i], stride=stride_list[i])
+            unfolded = F.unfold(x, kernel_size=kernel_list[i], stride=stride_list[i])
             # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
             unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
             unfolded = self.conv2(unfolded) + self.position(unfolded)
@@ -146,8 +146,14 @@ class DPConv(nn.Module):
             attention_output = attention_output / count
             out_list.append(attention_output)
 
-        out = self.conv3(torch.cat(out_list, dim=1) + x)
-        return out
+            # 使用可学习的动态权重进行加权平均
+            weighted_sum = sum(w * o for w, o in zip(self.dynamic_weights, out_list))
+            weighted_average = weighted_sum / self.dynamic_weights.sum()
+
+            out = self.conv3(weighted_average)
+            print(out.shape)
+
+            return out
 
 
 # 测试代码
