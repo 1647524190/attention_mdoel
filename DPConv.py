@@ -23,14 +23,13 @@ class SELayer(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads=8,
-                 attn_ratio=0.5):
+    def __init__(self, dim, num_heads=8,attn_ratio=0.5):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.key_dim = int(self.head_dim * attn_ratio)
         self.scale = self.key_dim ** -0.5
-        nh_kd = nh_kd = self.key_dim * num_heads
+        nh_kd = self.key_dim * num_heads
         h = dim + nh_kd * 2
         self.qkv = nn.Conv2d(dim, h, 1, )
         self.proj = nn.Conv2d(dim, dim, 1, )
