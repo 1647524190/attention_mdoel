@@ -65,14 +65,15 @@ class DPConv(nn.Module):
         #     raise ValueError("Kernel size must be even.")
         self.in_channels = in_channels
         self.num_windows_list = [num_windows // 2, num_windows, num_windows + num_windows // 2]
+        self.bottlenck_channels = in_channels // len(self.num_windows_list)
 
-        self.conv1 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
-        self.conv3 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1)
-        self.position = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, stride=1, padding=1,
-                                  groups=self.in_channels)
+        self.conv1 = nn.Conv2d(self.in_channels, self.bottlenck_channels, kernel_size=1, stride=1)
+        self.conv2 = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=1, stride=1)
+        self.conv3 = nn.Conv2d(len(self.num_windows_list) * self.bottlenck_channels, self.in_channels, kernel_size=1, stride=1)
+        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1,
+                                  groups=self.bottlenck_channels)
 
-        self.attention = SELayer(self.in_channels, reduction=16)
+        self.attention = SELayer(self.bottlenck_channels, reduction=16)
 
     def _make_even(self, x):
         """
@@ -107,9 +108,9 @@ class DPConv(nn.Module):
         return kernel_list, stride_list
 
     def forward(self, x):
-        x = self.conv1(x)
-        N, C, H, W = x.shape
-        kernel_list, stride_list = self._get_unfold_config(x)
+        x_compress = self.conv1(x)
+        N, C, H, W = x_compress.shape
+        kernel_list, stride_list = self._get_unfold_config(x_compress)
         # print("kernel_list: " + str(kernel_list))
         # print("stride_list: " + str(stride_list))
 
@@ -118,7 +119,7 @@ class DPConv(nn.Module):
         for i in range(len(self.num_windows_list)):
             # 对张量进行unfold展开，分解为 num_windows * num_windows 个子块
             # (N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
-            unfolded = F.unfold(x, kernel_size=kernel_list[i], stride=stride_list[i])
+            unfolded = F.unfold(x_compress, kernel_size=kernel_list[i], stride=stride_list[i])
             # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
             unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
             unfolded = self.conv2(unfolded) + self.position(unfolded)
@@ -145,9 +146,7 @@ class DPConv(nn.Module):
             attention_output = attention_output / count
             out_list.append(attention_output)
 
-        out = self.conv3(sum(out_list) / len(out_list))
-        print(out.shape)
-
+        out = self.conv3(torch.cat(out_list, dim=1) + x)
         return out
 
 
@@ -157,7 +156,7 @@ if __name__ == '__main__':
     # x = torch.randn(4, 256, 762, 524)
     x = torch.randn(1, 576, 8, 8)
 
-    attention = DPConv(x.shape[1], 3)
+    attention = DPConv(x.shape[1], 4)
     flops, params = profile(attention, inputs=(x,))
     print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     print('Params = ' + str(params))
