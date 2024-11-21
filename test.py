@@ -157,7 +157,7 @@ if __name__ == '__main__':
     # x = torch.randn(4, 256, 762, 524)
     x = torch.randn(1, 576, 8, 8)
 
-    attention = DPConv(x.shape[1], 5)
+    attention = DPConv(x.shape[1], 3)
     flops, params = profile(attention, inputs=(x,))
     print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     print('Params = ' + str(params))

@@ -26,7 +26,7 @@ class Attention(nn.Module):
 
         attn = ((q.transpose(-2, -1).sum(dim=3, keepdim=True) @ k.sum(dim=2, keepdim=True)) * self.scale)
         attn = attn.softmax(dim=-1)
-        x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
+        x = (v.sum(dim=3, keepdim=True) @ attn.transpose(-2, -1).sum(dim=2, keepdim=True)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
         x = self.proj(x)
         return x
 
