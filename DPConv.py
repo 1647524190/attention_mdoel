@@ -122,11 +122,10 @@ class DPConv(nn.Module):
             unfolded = F.unfold(x_compress, kernel_size=kernel_list[i], stride=stride_list[i])
             # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
             unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
-            conv_unfolded = self.conv2(unfolded)
 
             # 输入注意力模块
             # attention_output = unfolded
-            attention_output = self.attention(conv_unfolded) + self.position(unfolded)
+            attention_output = self.attention(self.conv2(unfolded)) + self.position(unfolded)
 
             # 转化为(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)，便于进行fold操作
             attention_output = attention_output.view(N, C * kernel_list[i][0] * kernel_list[i][1],
