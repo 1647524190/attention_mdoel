@@ -70,8 +70,7 @@ class DPConv(nn.Module):
         self.conv1 = nn.Conv2d(self.in_channels, self.bottlenck_channels, kernel_size=1, stride=1)
         self.conv2 = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=1, stride=1)
         self.conv3 = nn.Conv2d(len(self.num_windows_list) * self.bottlenck_channels, self.in_channels, kernel_size=1, stride=1)
-        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1,
-                                  groups=self.bottlenck_channels)
+        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1, groups=self.bottlenck_channels)
 
         self.attention = SELayer(self.bottlenck_channels, reduction=16)
 
@@ -128,17 +127,14 @@ class DPConv(nn.Module):
             attention_output = self.attention(self.conv2(unfolded)) + self.position(unfolded)
 
             # 转化为(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)，便于进行fold操作
-            attention_output = attention_output.view(N, C * kernel_list[i][0] * kernel_list[i][1],
-                                                     self.num_windows_list[i] ** 2)
+            attention_output = attention_output.view(N, C * kernel_list[i][0] * kernel_list[i][1], self.num_windows_list[i] ** 2)
 
             # 计算重叠部分的权重
-            count = F.fold(torch.ones_like(attention_output), output_size=(H, W), kernel_size=kernel_list[i],
-                           stride=stride_list[i])
+            count = F.fold(torch.ones_like(attention_output), output_size=(H, W), kernel_size=kernel_list[i], stride=stride_list[i])
             # print("count 形状: " + str(count.shape))
 
             # 重新通过 fold 将滑动窗口展开为完整的张量，形状为(N, C, H_orin, W_orin)
-            attention_output = F.fold(attention_output, output_size=(H, W), kernel_size=kernel_list[i],
-                                      stride=stride_list[i])
+            attention_output = F.fold(attention_output, output_size=(H, W), kernel_size=kernel_list[i], stride=stride_list[i])
             # print("fold后的形状: " + str(output.shape))
 
             # 对重叠部分取平均值
