@@ -70,23 +70,9 @@ class DPConv(nn.Module):
         self.conv1 = nn.Conv2d(self.in_channels, self.bottlenck_channels, kernel_size=1, stride=1)
         self.conv2 = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=1, stride=1)
         self.conv3 = nn.Conv2d(len(self.num_windows_list) * self.bottlenck_channels, self.in_channels, kernel_size=1, stride=1)
-        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1, groups=self.bottlenck_channels)
+        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1)
 
         self.attention = SELayer(self.bottlenck_channels, reduction=16)
-
-    def _make_even(self, x):
-        """
-        确保输入的 H 和 W 为偶数，如果为奇数，则在右边或下方补零。
-        """
-        N, C, H, W = x.shape
-        pad_h = 1 if H % 2 != 0 else 0  # 如果 H 是奇数，补 1
-        pad_w = 1 if W % 2 != 0 else 0  # 如果 W 是奇数，补 1
-
-        # 使用 F.pad 进行补偿，右边和下方分别补 0
-        if pad_h > 0 or pad_w > 0:
-            x = F.pad(x, (0, pad_w, 0, pad_h), mode='constant', value=0)
-
-        return x
 
     def _get_unfold_config(self, x):
         """
