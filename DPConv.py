@@ -68,8 +68,7 @@ class DPConv(nn.Module):
         self.bottlenck_channels = in_channels // len(self.num_windows_list)
 
         self.conv1 = nn.Conv2d(self.in_channels, self.bottlenck_channels, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=1, stride=1)
-        self.conv3 = nn.Conv2d(len(self.num_windows_list) * self.bottlenck_channels, self.in_channels, kernel_size=1, stride=1)
+        self.conv2 = nn.Conv2d(len(self.num_windows_list) * self.bottlenck_channels, self.in_channels, kernel_size=3, stride=1, padding=1)
         self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1)
 
         self.attention = SELayer(self.bottlenck_channels, reduction=16)
@@ -110,7 +109,7 @@ class DPConv(nn.Module):
 
             # 输入注意力模块
             # attention_output = unfolded
-            attention_output = self.attention(self.conv2(unfolded)) + self.position(unfolded)
+            attention_output = self.attention(unfolded) + self.position(unfolded)
 
             # 转化为(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)，便于进行fold操作
             attention_output = attention_output.view(N, C * kernel_list[i][0] * kernel_list[i][1], self.num_windows_list[i] ** 2)
@@ -127,7 +126,7 @@ class DPConv(nn.Module):
             attention_output = attention_output / count
             out_list.append(attention_output)
 
-        out = self.conv3(torch.cat(out_list, dim=1) + x)
+        out = self.conv2(torch.cat(out_list, dim=1) + x)
         return out
 
 
