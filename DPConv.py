@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from thop import profile
+from CBAM import Cbam
 
 
 class SELayer(nn.Module):
@@ -67,11 +68,28 @@ class DPConv(nn.Module):
         self.num_windows_list = [num_windows // 2, num_windows, num_windows + num_windows // 2]
         self.bottlenck_channels = in_channels // len(self.num_windows_list)
 
-        self.conv1 = nn.Conv2d(self.in_channels, self.bottlenck_channels, kernel_size=1, stride=1)
+        self.conv1 = nn.Conv2d(self.in_channels, len(self.num_windows_list) * self.bottlenck_channels, kernel_size=1, stride=1)
         self.conv2 = nn.Conv2d(len(self.num_windows_list) * self.bottlenck_channels, self.in_channels, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, stride=1, padding=1)
         self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1)
 
         self.attention = SELayer(self.bottlenck_channels, reduction=16)
+        # self.attention = Cbam(self.bottlenck_channels, 7)
+
+
+    def _make_even(self, x):
+        """
+        确保输入的 H 和 W 为偶数，如果为奇数，则在右边或下方补零。
+        """
+        N, C, H, W = x.shape
+        pad_h = 1 if H % 2 != 0 else 0  # 如果 H 是奇数，补 1
+        pad_w = 1 if W % 2 != 0 else 0  # 如果 W 是奇数，补 1
+
+        # 使用 F.pad 进行补偿，右边和下方分别补 0
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h), mode='constant', value=0)
+
+        return x
 
     def _get_unfold_config(self, x):
         """
@@ -92,9 +110,10 @@ class DPConv(nn.Module):
         return kernel_list, stride_list
 
     def forward(self, x):
-        x_compress = self.conv1(x)
-        N, C, H, W = x_compress.shape
-        kernel_list, stride_list = self._get_unfold_config(x_compress)
+        x = self.conv1(x)
+        x_list = [i for i in torch.chunk(x, chunks=3, dim=1)]
+        N, C, H, W = x_list[0].shape
+        kernel_list, stride_list = self._get_unfold_config(x_list[0])
         # print("kernel_list: " + str(kernel_list))
         # print("stride_list: " + str(stride_list))
 
@@ -103,7 +122,7 @@ class DPConv(nn.Module):
         for i in range(len(self.num_windows_list)):
             # 对张量进行unfold展开，分解为 num_windows * num_windows 个子块
             # (N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
-            unfolded = F.unfold(x_compress, kernel_size=kernel_list[i], stride=stride_list[i])
+            unfolded = F.unfold(x_list[i], kernel_size=kernel_list[i], stride=stride_list[i])
             # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
             unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
 
@@ -126,7 +145,7 @@ class DPConv(nn.Module):
             attention_output = attention_output / count
             out_list.append(attention_output)
 
-        out = self.conv2(torch.cat(out_list, dim=1) + x)
+        out = self.conv3(self.conv2(torch.cat(out_list, dim=1)) + x)
         return out
 
 
