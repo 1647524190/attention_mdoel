@@ -1,56 +1,37 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import fvcore.nn.weight_init as weight_init
 from thop import profile
 from CBAM import Cbam
+from PSA import PSA
+from SEAttention import SELayer
 
 
-class SELayer(nn.Module):
-    def __init__(self, channel, reduction=16):
-        super(SELayer, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Conv2d(channel, channel // reduction, kernel_size=1, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(channel // reduction, channel, kernel_size=1, bias=False),
-            nn.Sigmoid()
-        )
+class Conv(nn.Module):
+    def __init__(self, cin, cout, k=1, s=1, p=0, g=1, d=1, bn=True, act=False, init=True):
 
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x)
-        y = self.fc(y)
-        return x * y
-
-
-class Attention(nn.Module):
-    def __init__(self, dim, num_heads=8,
-                 attn_ratio=0.5):
         super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.key_dim = int(self.head_dim * attn_ratio)
-        self.scale = self.key_dim ** -0.5
-        nh_kd = nh_kd = self.key_dim * num_heads
-        h = dim + nh_kd * 2
-        self.qkv = nn.Conv2d(dim, h, 1, )
-        self.proj = nn.Conv2d(dim, dim, 1, )
-        self.pe = nn.Conv2d(dim, dim, 3, 1, 1, groups=dim)
+        self.conv = nn.Conv2d(cin, cout, k, s, p, groups=g, dilation=d, bias=False)
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        self.bn = nn.BatchNorm2d(cout) if bn is True else (bn if isinstance(bn, nn.Module) else nn.Identity())
+
+        if init:
+            self.initialize_weights()
+
+    def initialize_weights(self):
+        """初始化卷积层和批归一化层的权重。"""
+        if isinstance(self.conv, nn.Conv2d):
+            nn.init.kaiming_normal_(self.conv.weight, mode='fan_out', nonlinearity='relu')
+            if self.conv.bias is not None:
+                nn.init.constant_(self.conv.bias, 0)
+
+        if isinstance(self.bn, nn.BatchNorm2d):
+            nn.init.constant_(self.bn.weight, 1)
+            nn.init.constant_(self.bn.bias, 0)
 
     def forward(self, x):
-        B, C, H, W = x.shape
-        N = H * W
-        qkv = self.qkv(x)
-        q, k, v = qkv.view(B, self.num_heads, self.key_dim * 2 + self.head_dim, N).split(
-            [self.key_dim, self.key_dim, self.head_dim], dim=2)
-
-        attn = (
-                (q.transpose(-2, -1) @ k) * self.scale
-        )
-        attn = attn.softmax(dim=-1)
-        x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
-        x = self.proj(x)
-        return x
+        return self.act(self.bn(self.conv(x)))
 
 
 class DPConv(nn.Module):
@@ -62,34 +43,17 @@ class DPConv(nn.Module):
             out_channels: 输出通道数
         """
         super(DPConv, self).__init__()
-        # if not (num_windows % 2 == 0):
-        #     raise ValueError("Kernel size must be even.")
-        self.in_channels = in_channels
         self.num_windows_list = [num_windows // 2, num_windows, num_windows + num_windows // 2]
-        self.bottlenck_channels = in_channels // len(self.num_windows_list)
+        bottlenck_channels = in_channels // len(self.num_windows_list)
 
-        self.conv1 = nn.Conv2d(self.in_channels, len(self.num_windows_list) * self.bottlenck_channels, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(len(self.num_windows_list) * self.bottlenck_channels, self.in_channels, kernel_size=3, stride=1, padding=1)
-        self.conv3 = nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, stride=1, padding=1)
-        self.position = nn.Conv2d(self.bottlenck_channels, self.bottlenck_channels, kernel_size=3, stride=1, padding=1)
+        self.conv1 = Conv(in_channels, len(self.num_windows_list) * bottlenck_channels, k=1, s=1)
+        self.conv2 = Conv(len(self.num_windows_list) * bottlenck_channels, in_channels, k=3, s=1, p=1)
+        self.conv3 = Conv(in_channels, in_channels, k=3, s=1, p=1)
+        self.position = Conv(bottlenck_channels, bottlenck_channels, k=3, s=1, p=1)
 
-        self.attention = SELayer(self.bottlenck_channels, reduction=16)
-        # self.attention = Cbam(self.bottlenck_channels, 7)
-
-
-    def _make_even(self, x):
-        """
-        确保输入的 H 和 W 为偶数，如果为奇数，则在右边或下方补零。
-        """
-        N, C, H, W = x.shape
-        pad_h = 1 if H % 2 != 0 else 0  # 如果 H 是奇数，补 1
-        pad_w = 1 if W % 2 != 0 else 0  # 如果 W 是奇数，补 1
-
-        # 使用 F.pad 进行补偿，右边和下方分别补 0
-        if pad_h > 0 or pad_w > 0:
-            x = F.pad(x, (0, pad_w, 0, pad_h), mode='constant', value=0)
-
-        return x
+        # self.attention = SELayer(bottlenck_channels, reduction=16)
+        self.attention = PSA(bottlenck_channels, bottlenck_channels)
+        # self.attention = Cbam(bottlenck_channels, 7)
 
     def _get_unfold_config(self, x):
         """
@@ -131,14 +95,17 @@ class DPConv(nn.Module):
             attention_output = self.attention(unfolded) + self.position(unfolded)
 
             # 转化为(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)，便于进行fold操作
-            attention_output = attention_output.view(N, C * kernel_list[i][0] * kernel_list[i][1], self.num_windows_list[i] ** 2)
+            attention_output = attention_output.view(N, C * kernel_list[i][0] * kernel_list[i][1],
+                                                     self.num_windows_list[i] ** 2)
 
             # 计算重叠部分的权重
-            count = F.fold(torch.ones_like(attention_output), output_size=(H, W), kernel_size=kernel_list[i], stride=stride_list[i])
+            count = F.fold(torch.ones_like(attention_output), output_size=(H, W), kernel_size=kernel_list[i],
+                           stride=stride_list[i])
             # print("count 形状: " + str(count.shape))
 
             # 重新通过 fold 将滑动窗口展开为完整的张量，形状为(N, C, H_orin, W_orin)
-            attention_output = F.fold(attention_output, output_size=(H, W), kernel_size=kernel_list[i], stride=stride_list[i])
+            attention_output = F.fold(attention_output, output_size=(H, W), kernel_size=kernel_list[i],
+                                      stride=stride_list[i])
             # print("fold后的形状: " + str(output.shape))
 
             # 对重叠部分取平均值
@@ -153,7 +120,7 @@ class DPConv(nn.Module):
 if __name__ == '__main__':
     # x = torch.randn(2, 2, 4, 4)
     # x = torch.randn(4, 256, 762, 524)
-    x = torch.randn(1, 576, 8, 8)
+    x = torch.randn(1, 576, 21, 13)
 
     attention = DPConv(x.shape[1], 4)
     flops, params = profile(attention, inputs=(x,))
