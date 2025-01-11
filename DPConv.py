@@ -21,8 +21,8 @@ class DPConv(nn.Module):
         bottlenck_channels = c_in // len(self.windows_list)
 
         self.conv1 = nn.Conv2d(c_in, len(self.windows_list) * bottlenck_channels, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(len(self.windows_list) * bottlenck_channels, c_in, kernel_size=3, stride=1, padding=1)
-        self.conv3 = nn.Conv2d(c_in, c_in, 3, 1, 1)
+        self.conv2 = nn.Conv2d(len(self.windows_list) * bottlenck_channels, len(self.windows_list) * bottlenck_channels, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(len(self.windows_list) * bottlenck_channels, c_in, 3, 1, 1)
         self.position = nn.Conv2d(bottlenck_channels, bottlenck_channels, 3, 1, 1)
 
         # self.module = SELayer(bottlenck_channels, reduction=16)
