@@ -114,8 +114,8 @@ class DPConv(nn.Module):
         x_list = [i for i in torch.chunk(x, chunks=3, dim=1)]
         N, C, H, W = x_list[0].shape
         kernel_list, stride_list = self._get_unfold_config(x_list[0])
-        # print("kernel_list: " + str(kernel_list))
-        # print("stride_list: " + str(stride_list))
+        print("kernel_list: " + str(kernel_list))
+        print("stride_list: " + str(stride_list))
 
         # 多尺度unfold核展开
         out_list = []
@@ -153,7 +153,7 @@ class DPConv(nn.Module):
 if __name__ == '__main__':
     # x = torch.randn(2, 2, 4, 4)
     # x = torch.randn(4, 256, 762, 524)
-    x = torch.randn(1, 576, 8, 8)
+    x = torch.randn(1, 576, 12, 21)
 
     attention = DPConv(x.shape[1], 4)
     flops, params = profile(attention, inputs=(x,))
