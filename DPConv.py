@@ -8,8 +8,8 @@ from PSA import PSA
 from SEAttention import SELayer
 
 
-class DPConv(nn.Module):
-    def __init__(self, cin, windows):
+class PatchAttention(nn.Module):
+    def __init__(self, cin, windows=None):
         """
         现有注意力模块均针对全局输入特征进行建模，而忽视区域特征建模。该模块旨在将特征图unfold为patch之后逐个对patch进行注意力建模，
         并之后重新fold为原特征图。从而实现注意力模块对局部区域的特征建模，同时采用多尺度unfold展开实现不同区域大小的特征建模。
@@ -17,8 +17,10 @@ class DPConv(nn.Module):
             cin: 输入通道数
             windows: unfold展开的窗口数列表
         """
-        super(DPConv, self).__init__()
+        super(PatchAttention, self).__init__()
         # 检查 windows 是否为列表
+        if windows is None:
+            windows = [1, 3, 5]
         if not isinstance(windows, list):
             raise TypeError(f"Error: 'windows' must be a list, but got {type(windows).__name__}.")
 
@@ -31,6 +33,7 @@ class DPConv(nn.Module):
         # self.module = SELayer(cin, reduction=16)
         self.module = PSA(cin, cin)
         # self.module = CBAM(cin, 7)
+        # self.module = GlobalContextBlock(cin)
 
     def _get_unfold_config(self, x):
         """
@@ -99,7 +102,7 @@ if __name__ == '__main__':
     # x = torch.randn(4, 256, 762, 524)
     x = torch.randn(1, 576, 21, 13)
 
-    module = DPConv(x.shape[1], [2, 4, 6])
+    module = PatchAttention(x.shape[1], [1, 3, 5])
     flops, params = profile(module, inputs=(x,))
     print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     print('Params = ' + str(params))

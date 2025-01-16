@@ -23,7 +23,7 @@ class Attention(nn.Module):
         qkv = self.qkv(x)
         q, k, v = qkv.view(B, self.num_heads, self.key_dim * 2 + self.head_dim, N).split(
             [self.key_dim, self.key_dim, self.head_dim], dim=2)
-        qk = q.transpose(-2, -1).sum(dim=3, keepdims=True) @ k.sum(dim=2, keepdims=True) - q.transpose(-2, -1) @ k
+        qk = (q.transpose(-2, -1).sum(dim=3, keepdims=True) @ k.sum(dim=2, keepdims=True) - q.transpose(-2, -1) @ k) * self.scale
         attn = qk * self.scale
         attn = attn.softmax(dim=-1)
         x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
