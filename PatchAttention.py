@@ -91,9 +91,6 @@ class PatchAttention(nn.Module):
             attn = attn / count
             out_list.append(attn)
 
-        # out = self.conv3(self.conv2(torch.cat(out_list, dim=1)) + convx) + x
-        # out = self.fusion(torch.stack(out_list, dim=0).mean(dim=0)) + x
-        # out = self.fusion((torch.stack(out_list, dim=0).mean(dim=0))) + x
         out = self.resume(torch.cat(out_list, dim=1) + expnsionx) + x
         return out
 
