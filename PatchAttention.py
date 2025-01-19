@@ -27,7 +27,7 @@ class PatchAttention(nn.Module):
         self.windows = windows
 
         self.expansion = nn.Conv2d(cin, len(self.windows) * cin, kernel_size=1, stride=1)
-        self.fusion = nn.Conv2d(len(self.windows) * cin, cin, kernel_size=1, stride=1)
+        self.resume = nn.Conv2d(len(self.windows) * cin, cin, kernel_size=1, stride=1)
 
         # self.module = SELayer(cin, reduction=16)
         self.module = PSA(cin, cin)
@@ -57,11 +57,9 @@ class PatchAttention(nn.Module):
 
     def forward(self, x):
         expnsionx = self.expansion(x)
-        listx = [i for i in torch.chunk(expnsionx, chunks=3, dim=1)]
+        listx = [i for i in torch.chunk(expnsionx, chunks=len(self.windows), dim=1)]
         N, C, H, W = x.shape
         kernel_list, stride_list = self._get_unfold_config(x)
-        # print("kernel_list: " + str(kernel_list))
-        # print("stride_list: " + str(stride_list))
 
         # 多尺度unfold核展开
         out_list = []
@@ -81,11 +79,9 @@ class PatchAttention(nn.Module):
             # 计算重叠部分的权重
             count = torch.ones_like(attn)
             count = F.fold(count, output_size=(H, W), kernel_size=kernel_list[i], stride=stride_list[i])
-            # print("count 形状: " + str(count.shape))
 
             # 重新通过 fold 将滑动窗口展开为完整的张量，形状为(N, C, H_orin, W_orin)
             attn = F.fold(attn, output_size=(H, W), kernel_size=kernel_list[i], stride=stride_list[i])
-            # print("fold后的形状: " + str(output.shape))
 
             # 对重叠部分取平均值
             attn = attn / count
