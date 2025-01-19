@@ -26,9 +26,8 @@ class PatchAttention(nn.Module):
 
         self.windows = windows
 
-        self.conv1 = nn.Conv2d(cin, cin, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(len(self.windows) * cin, cin, kernel_size=3, stride=1, padding=1)
-        self.pe = nn.Conv2d(cin, cin, kernel_size=3, stride=1, padding=1)
+        self.expansion = nn.Conv2d(cin, len(self.windows) * cin, kernel_size=1, stride=1)
+        self.fusion = nn.Conv2d(len(self.windows) * cin, cin, kernel_size=1, stride=1)
 
         # self.module = SELayer(cin, reduction=16)
         self.module = PSA(cin, cin)
@@ -57,9 +56,10 @@ class PatchAttention(nn.Module):
         return kernel_list, stride_list
 
     def forward(self, x):
-        convx = self.conv1(x)
-        N, C, H, W = convx.shape
-        kernel_list, stride_list = self._get_unfold_config(convx)
+        expnsionx = self.expansion(x)
+        listx = [i for i in torch.chunk(expnsionx, chunks=3, dim=1)]
+        N, C, H, W = x.shape
+        kernel_list, stride_list = self._get_unfold_config(x)
         # print("kernel_list: " + str(kernel_list))
         # print("stride_list: " + str(stride_list))
 
@@ -68,12 +68,12 @@ class PatchAttention(nn.Module):
         for i in range(len(self.windows)):
             # 对张量进行unfold展开，分解为 num_windows * num_windows 个子块
             # (N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
-            unfolded = F.unfold(convx, kernel_size=kernel_list[i], stride=stride_list[i])
+            unfolded = F.unfold(listx[i], kernel_size=kernel_list[i], stride=stride_list[i])
             # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
             unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
 
             # 输入注意力模块
-            attn = self.module(unfolded) + self.pe(unfolded)
+            attn = self.module(unfolded)
 
             # 转化为(N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)，便于进行fold操作
             attn = attn.view(N, C * kernel_list[i][0] * kernel_list[i][1], self.windows[i] ** 2)
@@ -92,7 +92,9 @@ class PatchAttention(nn.Module):
             out_list.append(attn)
 
         # out = self.conv3(self.conv2(torch.cat(out_list, dim=1)) + convx) + x
-        out = self.conv2(torch.cat(out_list, dim=1)) + x
+        # out = self.fusion(torch.stack(out_list, dim=0).mean(dim=0)) + x
+        # out = self.fusion((torch.stack(out_list, dim=0).mean(dim=0))) + x
+        out = self.resume(torch.cat(out_list, dim=1) + expnsionx) + x
         return out
 
 
