@@ -54,10 +54,11 @@ class PatchAttention(nn.Module):
         return kernel_list, stride_list
 
     def forward(self, x):
-        expnsionx = self.expansion(x)
-        listx = [i for i in torch.chunk(expnsionx, chunks=len(self.windows), dim=1)]
         N, C, H, W = x.shape
         kernel_list, stride_list = self._get_unfold_config(x)
+
+        expnsionx = self.expansion(x)
+        listx = [i for i in torch.chunk(expnsionx, chunks=len(self.windows), dim=1)]
 
         # 多尺度unfold核展开
         out_list = []
