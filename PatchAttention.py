@@ -1,11 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import fvcore.nn.weight_init as weight_init
 from thop import profile
-from CBAM import Cbam
-from PSA import PSA
-from SEAttention import SELayer
+from block import PSA, CBAM, SELayer, GlobalContextBlock
 
 
 class PatchAttention(nn.Module):
@@ -28,6 +25,7 @@ class PatchAttention(nn.Module):
 
         self.expansion = nn.Conv2d(cin, len(self.windows) * cin, kernel_size=1, stride=1)
         self.resume = nn.Conv2d(len(self.windows) * cin, cin, kernel_size=1, stride=1)
+        self.fusion = nn.Conv2d(cin, cin, kernel_size=1, stride=1)
 
         # self.module = SELayer(cin, reduction=16)
         self.module = PSA(cin, cin)
@@ -87,7 +85,7 @@ class PatchAttention(nn.Module):
             attn = attn / count
             out_list.append(attn)
 
-        out = self.resume(torch.cat(out_list, dim=1) + expnsionx) + x
+        out = self.fusion(self.resume(torch.cat(out_list, dim=1) + expnsionx) + x)
         return out
 
 
