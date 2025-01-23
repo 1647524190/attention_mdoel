@@ -67,7 +67,8 @@ class PatchAttention(nn.Module):
             # (N, C * self.kernel_list[i] * self.kernel_list[i], num_windows)
             unfolded = F.unfold(listx[i], kernel_size=kernel_list[i], stride=stride_list[i])
             # view为(N, C, self.kernel_list[i], self.kernel_list[i], num_windows),便于后续处理
-            unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
+            # unfolded = unfolded.view(-1, C, kernel_list[i][0], kernel_list[i][1])
+            unfolded = unfolded.view(N, C, self.windows[i] ** 2, kernel_list[i][0] * kernel_list[i][1])
 
             # 输入注意力模块
             attn = self.module(unfolded)
