@@ -8,8 +8,10 @@ from block import PSA, CBAM, SELayer, GlobalContextBlock
 
 class MaskFusion(nn.Module):
     def __init__(self, threshold=0.5):
+        """
+        threshold: 原始张量与特征张量相似度二值化阈值，默认0.5
+        """
         super(MaskFusion, self).__init__()
-
         self.threshold = threshold
         self.conv1 = nn.Conv2d(2, 2, kernel_size=1, stride=1)
         self.conv2 = nn.Conv2d(2, 2, kernel_size=1, stride=1)
@@ -21,9 +23,8 @@ class MaskFusion(nn.Module):
         """
         基于同位置特征相似度的二值化掩模融合
         Args:
-            orin (Tensor): 输入张量1，形状为[N, C, H, W]
-            feature (Tensor): 输入张量2，形状与orin相同
-            threshold (float): 二值化阈值，默认0.5
+            orin (Tensor): 输入原始张量，形状为[N, C, H, W]
+            feature (Tensor): 输入特征张量，形状与orin相同
         Returns:
             fused (Tensor): 融合结果张量，形状与输入一致
         """
@@ -41,8 +42,8 @@ class MaskFusion(nn.Module):
         mask = (similarity > self.threshold).float()
 
         # 空间对齐融合
-        fused = mask * feature + (1 - mask) * orin
-        return fused
+        fusion = mask * feature + (1 - mask) * orin
+        return fusion
 
 
 class PatchAttention(nn.Module):
@@ -68,8 +69,8 @@ class PatchAttention(nn.Module):
         self.resume = nn.Conv2d(len(self.windows) * self.cin, self.cin, kernel_size=1, stride=1)
         self.fusion = nn.Conv2d(self.cin, self.cin, kernel_size=1, stride=1)
 
-        self.maskfusion1 = MaskFusion(len(self.windows) * self.cin)
-        self.maskfusion2 = MaskFusion(self.cin)
+        self.maskfusion1 = MaskFusion()
+        self.maskfusion2 = MaskFusion()
 
         # self.module = SELayer(self.cin, reduction=16)
         self.module = PSA(self.cin, self.cin)
@@ -136,7 +137,10 @@ class PatchAttention(nn.Module):
             attn = attn / count
             out_list.append(attn)
 
-        out = self.fusion(self.resume(torch.cat(out_list, dim=1) + expnsionx) + x)
+        out = self.maskfusion1(torch.cat(out_list, dim=1), expnsionx)
+        out = self.resume(out)
+        out = self.maskfusion2(out, x)
+        out = self.fusion(out)
         return out
 
 

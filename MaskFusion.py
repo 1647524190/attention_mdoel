@@ -15,11 +15,8 @@ class MaskFusion(nn.Module):
         super(MaskFusion, self).__init__()
 
         self.threshold = threshold
-        self.conv1 = nn.Conv2d(2, 2, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(2, 2, kernel_size=1, stride=1)
-
-    def c_pool(self, x):
-        return torch.cat((torch.max(x, 1)[0].unsqueeze(1), torch.mean(x, 1).unsqueeze(1)), dim=1)
+        self.conv1 = nn.Conv2d(1, 1, kernel_size=1, stride=1)
+        self.conv2 = nn.Conv2d(1, 1, kernel_size=1, stride=1)
 
     def forward(self, orin, feature):
         """
@@ -34,8 +31,8 @@ class MaskFusion(nn.Module):
         # 形状一致性检查
         assert orin.shape == feature.shape, f"Shape mismatch: orin {orin.shape}, feature {feature.shape}"
 
-        conv_orin = self.conv1(self.c_pool(orin))
-        conv_feature = self.conv2(self.c_pool(feature))
+        conv_orin = self.conv1(torch.sum(orin, dim=1, keepdim=True))
+        conv_feature = self.conv2(torch.sum(feature, dim=1, keepdim=True))
 
         # 计算同位置特征点积相似度
         similarity = torch.sum(conv_orin * conv_feature, dim=1, keepdim=True)  # 计算相似度，沿通道维度
