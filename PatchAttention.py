@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 from thop import profile
 from block import PSA, CBAM, SELayer, GlobalContextBlock
 
@@ -13,8 +12,8 @@ class MaskFusion(nn.Module):
         """
         super(MaskFusion, self).__init__()
         self.threshold = threshold
-        self.conv1 = nn.Conv2d(2, 2, kernel_size=1, stride=1)
-        self.conv2 = nn.Conv2d(2, 2, kernel_size=1, stride=1)
+        self.conv1 = nn.Conv2d(2, 2, 1, 1)
+        self.conv2 = nn.Conv2d(2, 2, 1, 1)
 
     def c_pool(self, x):
         return torch.cat((torch.max(x, 1)[0].unsqueeze(1), torch.mean(x, 1).unsqueeze(1)), dim=1)
@@ -65,9 +64,9 @@ class PatchAttention(nn.Module):
         self.windows = windows
         self.cin = cin
 
-        self.expansion = nn.Conv2d(self.cin, len(self.windows) * self.cin, kernel_size=1, stride=1)
-        self.resume = nn.Conv2d(len(self.windows) * self.cin, self.cin, kernel_size=1, stride=1)
-        self.fusion = nn.Conv2d(self.cin, self.cin, kernel_size=1, stride=1)
+        self.expansion = nn.Conv2d(self.cin, len(self.windows) * self.cin, 1, 1)
+        self.resume = nn.Conv2d(len(self.windows) * self.cin, self.cin, 1, 1)
+        self.fusion = nn.Conv2d(self.cin, self.cin, 1, 1)
 
         self.maskfusion1 = MaskFusion()
         self.maskfusion2 = MaskFusion()
